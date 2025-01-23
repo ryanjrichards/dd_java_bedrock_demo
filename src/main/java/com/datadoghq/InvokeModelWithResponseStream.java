@@ -1,9 +1,9 @@
-
 package com.datadoghq;
-// Use the native inference API to send a text message to Anthropic Claude
-// and print the response stream.
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
+import java.util.Scanner;
 import java.util.concurrent.ExecutionException;
 
 import org.json.JSONObject;
@@ -19,10 +19,14 @@ import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelWithRespo
 
 public class InvokeModelWithResponseStream {
 
-    public static String invokeModelWithResponseStream() throws ExecutionException, InterruptedException {
+    private static final List<JSONObject> conversationHistory = new ArrayList<>();
+
+    public static String invokeModelWithResponseStream(String prompt) throws ExecutionException, InterruptedException {
+
+        // Add the user's message to the conversation history.
+        conversationHistory.add(new JSONObject().put("role", "user").put("content", prompt));
 
         // Create a Bedrock Runtime client in the AWS Region you want to use.
-        // Replace the DefaultCredentialsProvider with your preferred credentials provider.
         var client = BedrockRuntimeAsyncClient.builder()
                 .credentialsProvider(DefaultCredentialsProvider.create())
                 .region(Region.US_EAST_1)
@@ -31,25 +35,28 @@ public class InvokeModelWithResponseStream {
         // Set the model ID, e.g., Claude 3 Haiku.
         var modelId = "anthropic.claude-3-haiku-20240307-v1:0";
 
+        // Prepare the JSON array of conversation history for the request.
+        StringBuilder messagesArray = new StringBuilder("[");
+        for (JSONObject message : conversationHistory) {
+            messagesArray.append(message.toString()).append(",");
+        }
+        // Remove the trailing comma and close the array.
+        if (messagesArray.length() > 1) {
+            messagesArray.setLength(messagesArray.length() - 1);
+        }
+        messagesArray.append("]");
+
         // The InvokeModelWithResponseStream API uses the model's native payload.
-        // Learn more about the available inference parameters and response fields at:
-        // https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
         var nativeRequestTemplate = """
                 {
                     "anthropic_version": "bedrock-2023-05-31",
                     "max_tokens": 512,
                     "temperature": 0.5,
-                    "messages": [{
-                        "role": "user",
-                        "content": "{{prompt}}"
-                    }]
+                    "messages": {{messages}}
                 }""";
 
-        // Define the prompt for the model.
-        var prompt = "Describe the purpose of a 'hello world' program in one line.";
-
-        // Embed the prompt in the model's native request payload.
-        String nativeRequest = nativeRequestTemplate.replace("{{prompt}}", prompt);
+        // Embed the conversation history in the model's native request payload.
+        String nativeRequest = nativeRequestTemplate.replace("{{messages}}", messagesArray.toString());
 
         // Create a request with the model ID and the model's native request payload.
         var request = InvokeModelWithResponseStreamRequest.builder()
@@ -65,12 +72,9 @@ public class InvokeModelWithResponseStream {
                 .subscriber(Visitor.builder().onChunk(chunk -> {
                     var response = new JSONObject(chunk.bytes().asUtf8String());
 
-                    // Extract and print the text from the content blocks.
+                    // Extract and append the text from the content blocks.
                     if (Objects.equals(response.getString("type"), "content_block_delta")) {
                         var text = new JSONPointer("/delta/text").queryFrom(response);
-                        System.out.print(text);
-
-                        // Append the text to the response text buffer.
                         completeResponseTextBuffer.append(text);
                     }
                 }).build()).build();
@@ -79,8 +83,14 @@ public class InvokeModelWithResponseStream {
             // Send the request and wait for the handler to process the response.
             client.invokeModelWithResponseStream(request, responseStreamHandler).get();
 
-            // Return the complete response text.
-            return completeResponseTextBuffer.toString();
+            // Get the complete response text.
+            String responseText = completeResponseTextBuffer.toString();
+
+            // Add the assistant's response to the conversation history.
+            conversationHistory.add(new JSONObject().put("role", "assistant").put("content", responseText));
+
+            // Return the response text.
+            return responseText;
 
         } catch (ExecutionException | InterruptedException e) {
             System.err.printf("Can't invoke '%s': %s", modelId, e.getCause().getMessage());
@@ -89,7 +99,22 @@ public class InvokeModelWithResponseStream {
     }
 
     public static void main(String[] args) throws ExecutionException, InterruptedException {
-        invokeModelWithResponseStream();
+        Scanner scanner = new Scanner(System.in);
+        String prompt;
+        String response;
+
+        while (true) {
+            System.out.print("You: ");
+            prompt = scanner.nextLine();
+
+            if (prompt.equalsIgnoreCase("exit")) {
+                break;
+            }
+
+            response = invokeModelWithResponseStream(prompt);
+            System.out.println("Claude: " + response);
+        }
+
+        scanner.close();
     }
 }
-
