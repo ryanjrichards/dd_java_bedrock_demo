@@ -58,6 +58,13 @@ nbdist/
 # MacOS
 .DS_Store
 
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# Linux
+*~
+
 # Environment variables
 .env
 
